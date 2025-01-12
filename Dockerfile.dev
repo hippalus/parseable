@@ -34,7 +34,7 @@ FROM gcr.io/distroless/cc-debian12:latest
 
 WORKDIR /parseable
 
-# Copy the static shell into base image.
+# Copy the Parseable binary from builder
 COPY --from=builder /parseable/target/release/parseable /usr/bin/parseable
 
 CMD ["/usr/bin/parseable"]

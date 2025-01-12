@@ -16,27 +16,23 @@
  *
  */
 
-use clap::{value_parser, Arg, ArgGroup, Command, FromArgMatches};
+#[allow(unused_imports)]
+use clap::{value_parser, Arg, ArgGroup, Command, CommandFactory, FromArgMatches};
 use std::path::PathBuf;
 
 use url::Url;
+
+#[cfg(any(
+    feature = "rdkafka-ssl",
+    feature = "rdkafka-ssl-vendored",
+    feature = "rdkafka-sasl"
+))]
+use crate::connectors::common::config::ConnectorConfig;
 
 use crate::{
     oidc::{self, OpenidConfig},
     option::{validation, Compression, Mode},
 };
-
-#[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-))]
-use crate::kafka::SslProtocol as KafkaSslProtocol;
-
-#[cfg(not(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-)))]
-use std::string::String as KafkaSslProtocol;
 
 #[derive(Debug, Default)]
 pub struct Cli {
@@ -113,14 +109,6 @@ pub struct Cli {
 
     pub ms_clarity_tag: Option<String>,
 
-    // Kafka specific env vars
-    pub kafka_topics: Option<String>,
-    pub kafka_host: Option<String>,
-    pub kafka_group: Option<String>,
-    pub kafka_client_id: Option<String>,
-    pub kafka_security_protocol: Option<KafkaSslProtocol>,
-    pub kafka_partitions: Option<String>,
-
     // Audit Logging env vars
     pub audit_logger: Option<Url>,
     pub audit_username: Option<String>,
@@ -159,14 +147,6 @@ impl Cli {
     pub const MAX_DISK_USAGE: &'static str = "max-disk-usage";
     pub const MS_CLARITY_TAG: &'static str = "ms-clarity-tag";
 
-    // Kafka specific env vars
-    pub const KAFKA_TOPICS: &'static str = "kafka-topics";
-    pub const KAFKA_HOST: &'static str = "kafka-host";
-    pub const KAFKA_GROUP: &'static str = "kafka-group";
-    pub const KAFKA_CLIENT_ID: &'static str = "kafka-client-id";
-    pub const KAFKA_SECURITY_PROTOCOL: &'static str = "kafka-security-protocol";
-    pub const KAFKA_PARTITIONS: &'static str = "kafka-partitions";
-
     pub const AUDIT_LOGGER: &'static str = "audit-logger";
     pub const AUDIT_USERNAME: &'static str = "audit-username";
     pub const AUDIT_PASSWORD: &'static str = "audit-password";
@@ -183,49 +163,8 @@ impl Cli {
     }
 
     pub fn create_cli_command_with_clap(name: &'static str) -> Command {
-        Command::new(name).next_line_help(false)
-        .arg(
-                 Arg::new(Self::KAFKA_TOPICS)
-                     .long(Self::KAFKA_TOPICS)
-                     .env("P_KAFKA_TOPICS")
-                     .value_name("STRING")
-                     .help("Kafka topics to subscribe to"),
-             )
-             .arg(
-                Arg::new(Self::KAFKA_HOST)
-                    .long(Self::KAFKA_HOST)
-                    .env("P_KAFKA_HOST")
-                    .value_name("STRING")
-                    .help("Address and port for Kafka server"),
-            )
-            .arg(
-                Arg::new(Self::KAFKA_GROUP)
-                    .long(Self::KAFKA_GROUP)
-                    .env("P_KAFKA_GROUP")
-                    .value_name("STRING")
-                    .help("Kafka group"),
-            )
-            .arg(
-                Arg::new(Self::KAFKA_CLIENT_ID)
-                    .long(Self::KAFKA_CLIENT_ID)
-                    .env("P_KAFKA_CLIENT_ID")
-                    .value_name("STRING")
-                    .help("Kafka client id"),
-            )
-            .arg(
-                Arg::new(Self::KAFKA_SECURITY_PROTOCOL)
-                    .long(Self::KAFKA_SECURITY_PROTOCOL)
-                    .env("P_KAFKA_SECURITY_PROTOCOL")
-                    .value_name("STRING")
-                    .help("Kafka security protocol"),
-            )
-            .arg(
-                Arg::new(Self::KAFKA_PARTITIONS)
-                    .long(Self::KAFKA_PARTITIONS)
-                    .env("P_KAFKA_PARTITIONS")
-                    .value_name("STRING")
-                    .help("Kafka partitions"),
-            )
+        let command = Command::new(name)
+            .next_line_help(false)
             .arg(
                 Arg::new(Self::AUDIT_LOGGER)
                     .long(Self::AUDIT_LOGGER)
@@ -249,22 +188,22 @@ impl Cli {
                     .value_name("STRING")
                     .help("Audit logger password"),
             )
-             .arg(
-                 Arg::new(Self::TLS_CERT)
-                     .long(Self::TLS_CERT)
-                     .env("P_TLS_CERT_PATH")
-                     .value_name("PATH")
-                     .value_parser(validation::file_path)
-                     .help("Local path on this device where certificate file is located. Required to enable TLS"),
-             )
-             .arg(
-                 Arg::new(Self::TLS_KEY)
-                     .long(Self::TLS_KEY)
-                     .env("P_TLS_KEY_PATH")
-                     .value_name("PATH")
-                     .value_parser(validation::file_path)
-                     .help("Local path on this device where private key file is located. Required to enable TLS"),
-             )
+            .arg(
+                Arg::new(Self::TLS_CERT)
+                    .long(Self::TLS_CERT)
+                    .env("P_TLS_CERT_PATH")
+                    .value_name("PATH")
+                    .value_parser(validation::file_path)
+                    .help("Local path on this device where certificate file is located. Required to enable TLS"),
+            )
+            .arg(
+                Arg::new(Self::TLS_KEY)
+                    .long(Self::TLS_KEY)
+                    .env("P_TLS_KEY_PATH")
+                    .value_name("PATH")
+                    .value_parser(validation::file_path)
+                    .help("Local path on this device where private key file is located. Required to enable TLS"),
+            )
             .arg(
                 Arg::new(Self::TRUSTED_CA_CERTS_PATH)
                     .long(Self::TRUSTED_CA_CERTS_PATH)
@@ -273,235 +212,251 @@ impl Cli {
                     .value_parser(validation::canonicalize_path)
                     .help("Local path on this device where all trusted certificates are located.")
             )
-             .arg(
-                 Arg::new(Self::ADDRESS)
-                     .long(Self::ADDRESS)
-                     .env("P_ADDR")
-                     .value_name("ADDR:PORT")
-                     .default_value("0.0.0.0:8000")
-                     .value_parser(validation::socket_addr)
-                     .help("Address and port for Parseable HTTP(s) server"),
-             )
-             .arg(
-                 Arg::new(Self::STAGING)
-                     .long(Self::STAGING)
-                     .env("P_STAGING_DIR")
-                     .value_name("DIR")
-                     .default_value("./staging")
-                     .value_parser(validation::canonicalize_path)
-                     .help("Local path on this device to be used as landing point for incoming events")
-                     .next_line_help(true),
-             )
             .arg(
-                 Arg::new(Self::USERNAME)
-                     .long(Self::USERNAME)
-                     .env("P_USERNAME")
-                     .value_name("STRING")
-                     .required(true)
-                     .help("Admin username to be set for this Parseable server"),
-             )
-             .arg(
-                 Arg::new(Self::PASSWORD)
-                     .long(Self::PASSWORD)
-                     .env("P_PASSWORD")
-                     .value_name("STRING")
-                     .required(true)
-                     .help("Admin password to be set for this Parseable server"),
-             )
-             .arg(
-                 Arg::new(Self::CHECK_UPDATE)
-                     .long(Self::CHECK_UPDATE)
-                     .env("P_CHECK_UPDATE")
-                     .value_name("BOOL")
-                     .required(false)
-                     .default_value("true")
-                     .value_parser(value_parser!(bool))
-                     .help("Enable/Disable checking for new Parseable release"),
-             )
-             .arg(
-                 Arg::new(Self::SEND_ANALYTICS)
-                     .long(Self::SEND_ANALYTICS)
-                     .env("P_SEND_ANONYMOUS_USAGE_DATA")
-                     .value_name("BOOL")
-                     .required(false)
-                     .default_value("true")
-                     .value_parser(value_parser!(bool))
-                     .help("Enable/Disable anonymous telemetry data collection"),
-             )
-             .arg(
-                 Arg::new(Self::OPEN_AI_KEY)
-                     .long(Self::OPEN_AI_KEY)
-                     .env("P_OPENAI_API_KEY")
-                     .value_name("STRING")
-                     .required(false)
-                     .help("OpenAI key to enable llm features"),
-             )
-             .arg(
-                 Arg::new(Self::OPENID_CLIENT_ID)
-                     .long(Self::OPENID_CLIENT_ID)
-                     .env("P_OIDC_CLIENT_ID")
-                     .value_name("STRING")
-                     .required(false)
-                     .help("Client id for OIDC provider"),
-             )
-             .arg(
-                 Arg::new(Self::OPENID_CLIENT_SECRET)
-                     .long(Self::OPENID_CLIENT_SECRET)
-                     .env("P_OIDC_CLIENT_SECRET")
-                     .value_name("STRING")
-                     .required(false)
-                     .help("Client secret for OIDC provider"),
-             )
-             .arg(
-                 Arg::new(Self::OPENID_ISSUER)
-                     .long(Self::OPENID_ISSUER)
-                     .env("P_OIDC_ISSUER")
-                     .value_name("URL")
-                     .required(false)
-                     .value_parser(validation::url)
-                     .help("OIDC provider's host address"),
-             )
-             .arg(
-                 Arg::new(Self::DOMAIN_URI)
-                     .long(Self::DOMAIN_URI)
-                     .env("P_ORIGIN_URI")
-                     .value_name("URL")
-                     .required(false)
-                     .value_parser(validation::url)
-                     .help("Parseable server global domain address"),
-             )
-             .arg(
-                 Arg::new(Self::GRPC_PORT)
-                     .long(Self::GRPC_PORT)
-                     .env("P_GRPC_PORT")
-                     .value_name("PORT")
-                     .default_value("8001")
-                     .required(false)
-                     .value_parser(value_parser!(u16))
-                     .help("Port for gRPC server"),
-             )
-             .arg(
-                 Arg::new(Self::FLIGHT_PORT)
-                     .long(Self::FLIGHT_PORT)
-                     .env("P_FLIGHT_PORT")
-                     .value_name("PORT")
-                     .default_value("8002")
-                     .required(false)
-                     .value_parser(value_parser!(u16))
-                     .help("Port for Arrow Flight Querying Engine"),
-             )
-             .arg(
-                 Arg::new(Self::CORS)
-                 .long(Self::CORS)
-                 .env("P_CORS")
-                 .value_name("BOOL")
-                 .required(false)
-                 .default_value("true")
-                 .value_parser(value_parser!(bool))
-                 .help("Enable/Disable CORS, default disabled"),
-             )
-             .arg(
-                 Arg::new(Self::LIVETAIL_CAPACITY)
-                     .long(Self::LIVETAIL_CAPACITY)
-                     .env("P_LIVETAIL_CAPACITY")
-                     .value_name("NUMBER")
-                     .default_value("1000")
-                     .required(false)
-                     .value_parser(value_parser!(usize))
-                     .help("Number of rows in livetail channel"),
-             )
-             .arg(
-                 Arg::new(Self::QUERY_MEM_POOL_SIZE)
-                     .long(Self::QUERY_MEM_POOL_SIZE)
-                     .env("P_QUERY_MEMORY_LIMIT")
-                     .value_name("Gib")
-                     .required(false)
-                     .value_parser(value_parser!(u8))
-                     .help("Set a fixed memory limit for query"),
-             )
-             .arg(
-                 // RowGroupSize controls the number of rows present in one row group
-                 // More rows = better compression but HIGHER Memory consumption during read/write
-                 // 1048576 is the default value for DataFusion
-                 Arg::new(Self::ROW_GROUP_SIZE)
-                     .long(Self::ROW_GROUP_SIZE)
-                     .env("P_PARQUET_ROW_GROUP_SIZE")
-                     .value_name("NUMBER")
-                     .required(false)
-                     .default_value("1048576")
-                     .value_parser(value_parser!(usize))
-                     .help("Number of rows in a row group"),
-             ).arg(
-                 Arg::new(Self::MODE)
-                     .long(Self::MODE)
-                     .env("P_MODE")
-                     .value_name("STRING")
-                     .required(false)
-                     .default_value("all")
-                     .value_parser([
-                         "query",
-                         "ingest",
-                         "all"])
-                     .help("Mode of operation"),
-             )
-             .arg(
-                 Arg::new(Self::INGESTOR_ENDPOINT)
-                     .long(Self::INGESTOR_ENDPOINT)
-                     .env("P_INGESTOR_ENDPOINT")
-                     .value_name("URL")
-                     .required(false)
-                     .help("URL to connect to this specific ingestor. Default is the address of the server.")
-             )
-             .arg(
-                 Arg::new(Self::PARQUET_COMPRESSION_ALGO)
-                     .long(Self::PARQUET_COMPRESSION_ALGO)
-                     .env("P_PARQUET_COMPRESSION_ALGO")
-                     .value_name("[UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD]")
-                     .required(false)
-                     .default_value("lz4")
-                     .value_parser([
-                         "uncompressed",
-                         "snappy",
-                         "gzip",
-                         "lzo",
-                         "brotli",
-                         "lz4",
-                         "zstd"])
-                     .help("Parquet compression algorithm"),
-             )
-             .arg(
-                 Arg::new(Self::HOT_TIER_PATH)
-                     .long(Self::HOT_TIER_PATH)
-                     .env("P_HOT_TIER_DIR")
-                     .value_name("DIR")
-                     .value_parser(validation::canonicalize_path)
-                     .help("Local path on this device to be used for hot tier data")
-                     .next_line_help(true),
-             )
-             .arg(
-                 Arg::new(Self::MAX_DISK_USAGE)
-                     .long(Self::MAX_DISK_USAGE)
-                     .env("P_MAX_DISK_USAGE_PERCENT")
-                     .value_name("percentage")
-                     .default_value("80.0")
-                     .value_parser(validation::validate_disk_usage)
-                     .help("Maximum allowed disk usage in percentage e.g 90.0 for 90%")
-                     .next_line_help(true),
-             )
-             .arg(
-                 Arg::new(Self::MS_CLARITY_TAG)
-                     .long(Self::MS_CLARITY_TAG)
-                     .env("P_MS_CLARITY_TAG")
-                     .value_name("STRING")
-                     .required(false)
-                     .help("Tag for MS Clarity"),
-             )
-             .group(
-                 ArgGroup::new("oidc")
-                     .args([Self::OPENID_CLIENT_ID, Self::OPENID_CLIENT_SECRET, Self::OPENID_ISSUER])
-                     .requires_all([Self::OPENID_CLIENT_ID, Self::OPENID_CLIENT_SECRET, Self::OPENID_ISSUER])
-                     .multiple(true)
-         )
+                Arg::new(Self::ADDRESS)
+                    .long(Self::ADDRESS)
+                    .env("P_ADDR")
+                    .value_name("ADDR:PORT")
+                    .default_value("0.0.0.0:8000")
+                    .value_parser(validation::socket_addr)
+                    .help("Address and port for Parseable HTTP(s) server"),
+            )
+            .arg(
+                Arg::new(Self::STAGING)
+                    .long(Self::STAGING)
+                    .env("P_STAGING_DIR")
+                    .value_name("DIR")
+                    .default_value("./staging")
+                    .value_parser(validation::canonicalize_path)
+                    .help("Local path on this device to be used as landing point for incoming events")
+                    .next_line_help(true),
+            )
+            .arg(
+                Arg::new(Self::USERNAME)
+                    .long(Self::USERNAME)
+                    .env("P_USERNAME")
+                    .value_name("STRING")
+                    .required(true)
+                    .help("Admin username to be set for this Parseable server"),
+            )
+            .arg(
+                Arg::new(Self::PASSWORD)
+                    .long(Self::PASSWORD)
+                    .env("P_PASSWORD")
+                    .value_name("STRING")
+                    .required(true)
+                    .help("Admin password to be set for this Parseable server"),
+            )
+            .arg(
+                Arg::new(Self::CHECK_UPDATE)
+                    .long(Self::CHECK_UPDATE)
+                    .env("P_CHECK_UPDATE")
+                    .value_name("BOOL")
+                    .required(false)
+                    .default_value("true")
+                    .value_parser(value_parser!(bool))
+                    .help("Enable/Disable checking for new Parseable release"),
+            )
+            .arg(
+                Arg::new(Self::SEND_ANALYTICS)
+                    .long(Self::SEND_ANALYTICS)
+                    .env("P_SEND_ANONYMOUS_USAGE_DATA")
+                    .value_name("BOOL")
+                    .required(false)
+                    .default_value("true")
+                    .value_parser(value_parser!(bool))
+                    .help("Enable/Disable anonymous telemetry data collection"),
+            )
+            .arg(
+                Arg::new(Self::OPEN_AI_KEY)
+                    .long(Self::OPEN_AI_KEY)
+                    .env("P_OPENAI_API_KEY")
+                    .value_name("STRING")
+                    .required(false)
+                    .help("OpenAI key to enable llm features"),
+            )
+            .arg(
+                Arg::new(Self::OPENID_CLIENT_ID)
+                    .long(Self::OPENID_CLIENT_ID)
+                    .env("P_OIDC_CLIENT_ID")
+                    .value_name("STRING")
+                    .required(false)
+                    .help("Client id for OIDC provider"),
+            )
+            .arg(
+                Arg::new(Self::OPENID_CLIENT_SECRET)
+                    .long(Self::OPENID_CLIENT_SECRET)
+                    .env("P_OIDC_CLIENT_SECRET")
+                    .value_name("STRING")
+                    .required(false)
+                    .help("Client secret for OIDC provider"),
+            )
+            .arg(
+                Arg::new(Self::OPENID_ISSUER)
+                    .long(Self::OPENID_ISSUER)
+                    .env("P_OIDC_ISSUER")
+                    .value_name("URL")
+                    .required(false)
+                    .value_parser(validation::url)
+                    .help("OIDC provider's host address"),
+            )
+            .arg(
+                Arg::new(Self::DOMAIN_URI)
+                    .long(Self::DOMAIN_URI)
+                    .env("P_ORIGIN_URI")
+                    .value_name("URL")
+                    .required(false)
+                    .value_parser(validation::url)
+                    .help("Parseable server global domain address"),
+            )
+            .arg(
+                Arg::new(Self::GRPC_PORT)
+                    .long(Self::GRPC_PORT)
+                    .env("P_GRPC_PORT")
+                    .value_name("PORT")
+                    .default_value("8001")
+                    .required(false)
+                    .value_parser(value_parser!(u16))
+                    .help("Port for gRPC server"),
+            )
+            .arg(
+                Arg::new(Self::FLIGHT_PORT)
+                    .long(Self::FLIGHT_PORT)
+                    .env("P_FLIGHT_PORT")
+                    .value_name("PORT")
+                    .default_value("8002")
+                    .required(false)
+                    .value_parser(value_parser!(u16))
+                    .help("Port for Arrow Flight Querying Engine"),
+            )
+            .arg(
+                Arg::new(Self::CORS)
+                    .long(Self::CORS)
+                    .env("P_CORS")
+                    .value_name("BOOL")
+                    .required(false)
+                    .default_value("true")
+                    .value_parser(value_parser!(bool))
+                    .help("Enable/Disable CORS, default disabled"),
+            )
+            .arg(
+                Arg::new(Self::LIVETAIL_CAPACITY)
+                    .long(Self::LIVETAIL_CAPACITY)
+                    .env("P_LIVETAIL_CAPACITY")
+                    .value_name("NUMBER")
+                    .default_value("1000")
+                    .required(false)
+                    .value_parser(value_parser!(usize))
+                    .help("Number of rows in livetail channel"),
+            )
+            .arg(
+                Arg::new(Self::QUERY_MEM_POOL_SIZE)
+                    .long(Self::QUERY_MEM_POOL_SIZE)
+                    .env("P_QUERY_MEMORY_LIMIT")
+                    .value_name("Gib")
+                    .required(false)
+                    .value_parser(value_parser!(u8))
+                    .help("Set a fixed memory limit for query"),
+            )
+            .arg(
+                // RowGroupSize controls the number of rows present in one row group
+                // More rows = better compression but HIGHER Memory consumption during read/write
+                // 1048576 is the default value for DataFusion
+                Arg::new(Self::ROW_GROUP_SIZE)
+                    .long(Self::ROW_GROUP_SIZE)
+                    .env("P_PARQUET_ROW_GROUP_SIZE")
+                    .value_name("NUMBER")
+                    .required(false)
+                    .default_value("1048576")
+                    .value_parser(value_parser!(usize))
+                    .help("Number of rows in a row group"),
+            ).arg(
+            Arg::new(Self::MODE)
+                .long(Self::MODE)
+                .env("P_MODE")
+                .value_name("STRING")
+                .required(false)
+                .default_value("all")
+                .value_parser([
+                    "query",
+                    "ingest",
+                    "all"])
+                .help("Mode of operation"),
+        )
+            .arg(
+                Arg::new(Self::INGESTOR_ENDPOINT)
+                    .long(Self::INGESTOR_ENDPOINT)
+                    .env("P_INGESTOR_ENDPOINT")
+                    .value_name("URL")
+                    .required(false)
+                    .help("URL to connect to this specific ingestor. Default is the address of the server.")
+            )
+            .arg(
+                Arg::new(Self::PARQUET_COMPRESSION_ALGO)
+                    .long(Self::PARQUET_COMPRESSION_ALGO)
+                    .env("P_PARQUET_COMPRESSION_ALGO")
+                    .value_name("[UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD]")
+                    .required(false)
+                    .default_value("lz4")
+                    .value_parser([
+                        "uncompressed",
+                        "snappy",
+                        "gzip",
+                        "lzo",
+                        "brotli",
+                        "lz4",
+                        "zstd"])
+                    .help("Parquet compression algorithm"),
+            )
+            .arg(
+                Arg::new(Self::HOT_TIER_PATH)
+                    .long(Self::HOT_TIER_PATH)
+                    .env("P_HOT_TIER_DIR")
+                    .value_name("DIR")
+                    .value_parser(validation::canonicalize_path)
+                    .help("Local path on this device to be used for hot tier data")
+                    .next_line_help(true),
+            )
+            .arg(
+                Arg::new(Self::MAX_DISK_USAGE)
+                    .long(Self::MAX_DISK_USAGE)
+                    .env("P_MAX_DISK_USAGE_PERCENT")
+                    .value_name("percentage")
+                    .default_value("80.0")
+                    .value_parser(validation::validate_disk_usage)
+                    .help("Maximum allowed disk usage in percentage e.g 90.0 for 90%")
+                    .next_line_help(true),
+            )
+            .arg(
+                Arg::new(Self::MS_CLARITY_TAG)
+                    .long(Self::MS_CLARITY_TAG)
+                    .env("P_MS_CLARITY_TAG")
+                    .value_name("STRING")
+                    .required(false)
+                    .help("Tag for MS Clarity"),
+            )
+            .group(
+                ArgGroup::new("oidc")
+                    .args([Self::OPENID_CLIENT_ID, Self::OPENID_CLIENT_SECRET, Self::OPENID_ISSUER])
+                    .requires_all([Self::OPENID_CLIENT_ID, Self::OPENID_CLIENT_SECRET, Self::OPENID_ISSUER])
+                    .multiple(true)
+            );
+
+        #[cfg(any(
+            feature = "rdkafka-ssl",
+            feature = "rdkafka-ssl-vendored",
+            feature = "rdkafka-sasl"
+        ))]
+        {
+            command.subcommand(ConnectorConfig::command())
+        }
+
+        #[cfg(not(any(
+            feature = "rdkafka-ssl",
+            feature = "rdkafka-ssl-vendored",
+            feature = "rdkafka-sasl"
+        )))]
+        command
     }
 }
 
@@ -513,21 +468,6 @@ impl FromArgMatches for Cli {
     }
 
     fn update_from_arg_matches(&mut self, m: &clap::ArgMatches) -> Result<(), clap::Error> {
-        #[cfg(any(
-            all(target_os = "linux", target_arch = "x86_64"),
-            all(target_os = "macos", target_arch = "aarch64")
-        ))]
-        {
-            self.kafka_topics = m.get_one::<String>(Self::KAFKA_TOPICS).cloned();
-            self.kafka_security_protocol = m
-                .get_one::<KafkaSslProtocol>(Self::KAFKA_SECURITY_PROTOCOL)
-                .cloned();
-            self.kafka_group = m.get_one::<String>(Self::KAFKA_GROUP).cloned();
-            self.kafka_client_id = m.get_one::<String>(Self::KAFKA_CLIENT_ID).cloned();
-            self.kafka_host = m.get_one::<String>(Self::KAFKA_HOST).cloned();
-            self.kafka_partitions = m.get_one::<String>(Self::KAFKA_PARTITIONS).cloned();
-        }
-
         self.audit_logger = m.get_one::<Url>(Self::AUDIT_LOGGER).cloned();
         self.audit_username = m.get_one::<String>(Self::AUDIT_USERNAME).cloned();
         self.audit_password = m.get_one::<String>(Self::AUDIT_PASSWORD).cloned();
