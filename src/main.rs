@@ -16,28 +16,28 @@
  *
  */
 
+#[cfg(any(
+    feature = "rdkafka-ssl",
+    feature = "rdkafka-ssl-vendored",
+    feature = "rdkafka-sasl"
+))]
+use parseable::connectors;
 use parseable::{
-    banner,
+    banner, metrics,
     option::{Mode, CONFIG},
     rbac, storage, IngestServer, ParseableServer, QueryServer, Server,
 };
 use tokio::signal::ctrl_c;
 use tokio::sync::oneshot;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
-
-#[cfg(any(
-    all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64")
-))]
-use parseable::kafka;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter, Registry};
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .compact()
-        .init();
+    init_logger(LevelFilter::DEBUG);
 
     // these are empty ptrs so mem footprint should be minimal
     let server: Box<dyn ParseableServer> = match CONFIG.options.mode {
@@ -55,15 +55,6 @@ async fn main() -> anyhow::Result<()> {
     // keep metadata info in mem
     metadata.set_global();
 
-    #[cfg(any(
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64")
-    ))]
-    // load kafka server
-    if CONFIG.options.mode != Mode::Query {
-        tokio::task::spawn(kafka::setup_integration());
-    }
-
     // Spawn a task to trigger graceful shutdown on appropriate signal
     let (shutdown_trigger, shutdown_rx) = oneshot::channel::<()>();
     tokio::spawn(async move {
@@ -74,9 +65,48 @@ async fn main() -> anyhow::Result<()> {
         shutdown_trigger.send(()).unwrap();
     });
 
-    server.init(shutdown_rx).await?;
+    let prometheus = metrics::build_metrics_handler();
+
+    #[cfg(any(
+        feature = "rdkafka-ssl",
+        feature = "rdkafka-ssl-vendored",
+        feature = "rdkafka-sasl"
+    ))]
+    {
+        let parseable_server = server.init(&prometheus, shutdown_rx);
+        let connectors = connectors::init(&prometheus);
+
+        tokio::try_join!(parseable_server, connectors)?;
+    }
+
+    #[cfg(not(any(
+        feature = "rdkafka-ssl",
+        feature = "rdkafka-ssl-vendored",
+        feature = "rdkafka-sasl"
+    )))]
+    {
+        let parseable_server = server.init(&prometheus, shutdown_rx);
+        parseable_server.await?;
+    }
 
     Ok(())
+}
+
+pub fn init_logger(default_level: LevelFilter) {
+    let filter_layer = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(default_level.to_string()));
+
+    let fmt_layer = fmt::layer()
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .with_line_number(true)
+        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+        .compact();
+
+    Registry::default()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .init();
 }
 
 #[cfg(windows)]

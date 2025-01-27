@@ -14,7 +14,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 # build stage
-FROM rust:1.83.0-bookworm as builder
+FROM  rust:1.84.0-bookworm AS builder
 
 LABEL org.opencontainers.image.title="Parseable"
 LABEL maintainer="Parseable Team <hi@parseable.io>"
@@ -23,6 +23,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 WORKDIR /parseable
 COPY . .
+
 RUN cargo build --release
 
 # final stage
@@ -30,7 +31,7 @@ FROM gcr.io/distroless/cc-debian12:latest
 
 WORKDIR /parseable
 
-# Copy the static shell into base image.
+# Copy the Parseable binary from builder
 COPY --from=builder /parseable/target/release/parseable /usr/bin/parseable
 
 CMD ["/usr/bin/parseable"]
